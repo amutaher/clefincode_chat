@@ -82,7 +82,7 @@ def login(email , password):
     else:    
         return [{"status":0,"description":"User doesn't exist","data":None}]
 # ==========================================================================================
-@frappe.whitelist()
+@frappe.whitelist(allow_guest = True)
 def get_versions():   
     versions = {}
     send_notification_with_content = 0
@@ -2831,15 +2831,18 @@ def get_users_for_mentions(room = None):
     )
 # ==========================================================================================
 @frappe.whitelist()
-def end_meeting(meeting_id,duration):
+def end_meeting(meeting_id,duration,user_end=None):
     creation_date = datetime.datetime.utcnow()
     meet_doc = frappe.get_doc("ClefinCode Chat Meet" , meeting_id)
     results = {
         "realtime_type" : "end_meet",
     }
-    for user in meet_doc.get_members():
-        if user != meet_doc.meet_creator:
-            send_notification(user , results, "end_meet")
+    if user_end:
+        send_notification(user_end , results, "end_meet")
+    else:
+        for user in meet_doc.get_members():
+            if user != meet_doc.meet_creator:
+                send_notification(user , results, "end_meet")
     meet_doc.update({
         "duration" : duration,
         "ended":1
@@ -2849,12 +2852,14 @@ def end_meeting(meeting_id,duration):
     return {"results" : [{"meet" : meet_doc.get_members()}]}
 # ==========================================================================================
 @frappe.whitelist()
-def accept_meeting(meeting_id):
+def accept_meeting(meeting_id,user=None):
     creation_date = datetime.datetime.utcnow()
     meet_doc = frappe.get_doc("ClefinCode Chat Meet" , meeting_id)
     results = {
         "realtime_type" : "accept_meet",
     }
+    if user:
+        results['user']=user
     send_notification(meet_doc.meet_creator , results, "accept_meet")
     frappe.db.commit()
     return {"results" : [{"meet" : meeting_id}]}
