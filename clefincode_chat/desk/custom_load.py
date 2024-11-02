@@ -129,34 +129,58 @@ def get_view_logs(doctype, docname):
 
 def add_chat_topics(doc, docinfo):
 	docinfo.chat_topics = []
-	chat_topics = frappe.get_all("ClefinCode Chat Topic Reference" , {"docname" : doc.name , "active" : 1} , "parent")
-	for t in chat_topics:
-		chat_channel = frappe.db.get_value("ClefinCode Chat Topic" , t.parent , "chat_channel")
-		is_private = frappe.db.get_value("ClefinCode Chat Topic" , t.parent , "is_private")
+	chat_topics = frappe.db.sql(
+		"""
+		SELECT 
+			ref.parent, topic.chat_channel, topic.is_private, topic.subject, 
+			topic.owner, topic.creation, topic.topic_status
+		FROM 
+			`tabClefinCode Chat Topic Reference` AS ref
+		JOIN 
+			`tabClefinCode Chat Topic` AS topic ON ref.parent = topic.name
+		WHERE 
+			ref.docname = %s AND ref.active = 1
+		""", 
+		(doc.name,), as_dict=True
+	)
+
+	for chat_topic_data in chat_topics:
+		chat_channel = chat_topic_data.chat_channel
+		is_private = chat_topic_data.is_private
+		chat_topic_subject = f'"{chat_topic_data.subject}"' if chat_topic_data.subject else ""
 		
-		chat_topic_subject = " \"" +frappe.db.get_value("ClefinCode Chat Topic" , t.parent , "subject")+ "\"" if frappe.db.get_value("ClefinCode Chat Topic" , t.parent , "subject") else ""		
-		channel_name = f"<span class='topic-card' data-channel ='{chat_channel}' data-topic = '{t.parent}' data-subject = '{chat_topic_subject}' data-alternative-subject = '{get_topic_title(chat_channel)}' data-is-private = '{is_private}' title= '{chat_topic_subject if chat_topic_subject else get_topic_title(chat_channel)}' style='text-decoration:underline;cursor:pointer'>{chat_topic_subject if chat_topic_subject else split_channel_name(get_topic_title(chat_channel))}</span>"
-		subject = "<b>@ClefinCode Chat Topic:</b> " + channel_name					
+		alternative_subject = get_topic_title(chat_channel)
+		title = chat_topic_subject if chat_topic_subject else alternative_subject
+		display_subject = chat_topic_subject if chat_topic_subject else split_channel_name(alternative_subject)
+		
+		channel_name = (
+			f"<span class='topic-card' data-channel='{chat_channel}' data-topic='{chat_topic_data.parent}' "
+			f"data-subject='{chat_topic_subject}' data-alternative-subject='{alternative_subject}' "
+			f"data-is-private='{is_private}' title='{title}' "
+			f"style='text-decoration:underline;cursor:pointer'>{display_subject}</span>"
+		)
+		subject = f"<b>@ClefinCode Chat Topic:</b> {channel_name}"
 		
 		docinfo.chat_topics.append({
-			"name" : t.parent,
-			"owner" : frappe.db.get_value("ClefinCode Chat Topic" , t.parent , "owner"),
-			"subject" : subject,
-			"creation" : frappe.db.get_value("ClefinCode Chat Topic" , t.parent , "creation"),
-			"topic_status" : frappe.db.get_value("ClefinCode Chat Topic" , t.parent , "topic_status")
-        })
+			"name": chat_topic_data.parent,
+			"owner": chat_topic_data.owner,
+			"subject": subject,
+			"creation": chat_topic_data.creation,
+			"topic_status": chat_topic_data.topic_status,
+		})
+
 
 def get_topic_title(chat_channel):
-	channel_doc = frappe.get_doc("ClefinCode Chat Channel" , chat_channel)
-	channel_name = ""
+	channel_doc = frappe.get_doc("ClefinCode Chat Channel", chat_channel)
+
 	if channel_doc.type == "Group":
-		channel_name = channel_doc.channel_name
-		if not channel_name:
-			channel_name = channel_doc.get_group_name()
-	elif channel_doc.type == "Direct":
-		channel_name = get_contact_full_name(channel_doc.members[0].user) + " and " + get_contact_full_name(channel_doc.members[1].user)
-	
-	return channel_name
+		return channel_doc.channel_name or channel_doc.get_group_name()
+
+	if channel_doc.type == "Direct" and len(channel_doc.members) >= 2:
+		return f"{get_contact_full_name(channel_doc.members[0].user)} and {get_contact_full_name(channel_doc.members[1].user)}"
+
+	return ""
+
 
 
 def split_channel_name(channel_name):
