@@ -137,7 +137,7 @@ You'll first need to set up developer assets and obtain credentials from the Met
 
 ### 1. Enter WhatsApp Credentials
 
-<img width="1402" src="screenshots/web/WhatsApp_credentials.png">
+<img width="1402" src="screenshots/web/Whatsapp_credentials.png">
 
 ### 2. Set Up the WhatsApp Profile
 
