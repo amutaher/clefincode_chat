@@ -628,7 +628,7 @@ def get_channels_list(user_email, limit=10, offset=0):
             ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
         INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser2
             ON ChatChannelUser2.parent = ChatChannel.name AND ChatChannelUser2.user <> {user_email_param}
-        WHERE type = 'Direct' AND is_parent = 1
+                        AND type = 'Direct' AND is_parent = 1
         UNION ALL
         SELECT
             ChatChannelContributor.channel AS room,
@@ -662,6 +662,7 @@ def get_channels_list(user_email, limit=10, offset=0):
                 elif room['type'] == "Contributor":
                     room['room_name'] = "@" + frappe.get_doc("ClefinCode Chat Channel", room['parent_channel']).get_channel_name_for_contributor()
                     last_message_info = get_last_sub_channel_for_user(room['parent_channel'], user_email)
+                    room['send_date'] = last_message_info['send_date']
                     room['user_unread_messages'] = contributor_unread_messages(user_email, room['parent_channel'])
                 elif room['type'] == "Group":
                     room['room_name'] = frappe.get_doc("ClefinCode Chat Channel", room['room']).get_group_name()
@@ -1153,7 +1154,7 @@ def get_latest_channels_updates(user_email, last_message_date):
             ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
         INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser2
             ON ChatChannelUser2.parent = ChatChannel.name AND ChatChannelUser2.user <> {user_email_param}
-        WHERE type = 'Direct' AND is_parent = 1 AND ChatChannel.modified_date > {last_message_date_param}
+                            AND type = 'Direct' AND is_parent = 1 AND ChatChannel.modified_date > {last_message_date_param}
         UNION ALL
         SELECT
             ChatChannelContributor.channel AS room,
@@ -1186,6 +1187,7 @@ def get_latest_channels_updates(user_email, last_message_date):
                 elif room['type'] == "Contributor":
                     room['room_name'] = "@" + frappe.get_doc("ClefinCode Chat Channel", room['parent_channel']).get_channel_name_for_contributor()
                     last_message_info = get_last_sub_channel_for_user(room['parent_channel'], user_email)
+                    room['send_date'] = last_message_info['send_date']
                     room['user_unread_messages'] = contributor_unread_messages(user_email, room['parent_channel'])
                 elif room['type'] == "Group":
                     room['room_name'] = frappe.get_doc("ClefinCode Chat Channel", room['room']).get_group_name()
