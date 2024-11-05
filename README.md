@@ -63,6 +63,7 @@ Dedicated Support: Our support section within the app is designed to assist you 
 
 - 🔄 **User / Doctype Mentions**: Flexibly join and contribute to conversations and topic-integrated discussions.
 - 🌟 **Guest Messaging**: Enhance customer service with a website support portal.
+- 📲 **WhatsApp Business API Integration**: Manage WhatsApp conversations directly within your ERP, centralizing and organizing interactions for invoices, projects, and day-to-day communications.
 
 ## 🌍 Access Anywhere, Anytime
 
@@ -129,6 +130,36 @@ bench --site yoursite.name install-app clefincode_chat
 bench --site yoursite.name migrate
 bench build
 ```
+## Getting Started with WhatsApp in ERPNext
+
+You'll first need to set up developer assets and obtain credentials from the Meta Developer Portal. Follow this guide to get started: 
+[Meta Developer Portal Guide](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started#set-up-developer-assets)
+
+### 1. Enter WhatsApp Credentials
+
+<img width="1402" src="screenshots/web/Whatsapp_credentials.png">
+
+### 2. Set Up the WhatsApp Profile
+
+<img width="1402" src="screenshots/web/whatsapp_profile.png">
+
+**Important Tips:**
+
+- When entering the WhatsApp number, do not include `00` or `+`. Start directly with the country code and the number, e.g., `971xxxxxxxxx`.
+  
+- There are two types of WhatsApp profiles you can create:
+  
+  1. **Personal** 👤: Opens a direct communication channel between the sender and the receiver.
+  2. **Support** 👥: Opens a group channel between the sender and receiver, allowing the admin to add or remove other members from the channel.
+
+- After saving the WhatsApp profile, a WhatsApp template will be automatically created.
+
+<img width="1402" src="screenshots/web/save_whatsapp_profile.png">
+<img width="1402" src="screenshots/web/whatsapp_template.png">
+
+🎉Now, you can begin sending and receiving WhatsApp messages directly using our chat app within your ERP system🎉
+
+<img width="1402" src="screenshots/web/send_message.png">  
 
 ## Reporting Bugs
 

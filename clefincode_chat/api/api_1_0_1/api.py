@@ -19,6 +19,8 @@ from passlib.context import CryptContext
 from frappe import __version__ as frappe_version
 import requests
 from clefincode_chat.utils.fcm_notifications import send_notification_via_firebase 
+from clefincode_chat.utils.utils import  get_access_token, check_template_status
+import subprocess
 
 passlibctx = None
 if int(frappe_version.split('.')[0]) > 14:
@@ -190,13 +192,22 @@ def get_settings(token):
 
     elif config['user_type'] == "system_user":
         if is_limited_user(config['user_email']):
-            config['is_limited_user'] = True            
+            config['is_limited_user'] = True
+        else:
+            config['whatsapp_numbers'] = get_whatsapp_numbers_for_sender(config['user_email'])
+            config['default_whatsapp_number'] , config['default_whatsapp_type']= get_default_whatsapp_number(config['whatsapp_numbers'])
         
         config['user'] = frappe.db.get_value('User', config['user_email'], 'full_name')
         config['time_zone'] = frappe.db.get_value('User', config['user_email'], 'time_zone')
     
     return config
 # ==========================================================================================
+@frappe.whitelist()
+def get_whatsapp_numbers_for_user(user):
+    default_whatsapp_number , default_whatsapp_type = get_default_whatsapp_number(get_whatsapp_numbers_for_sender(user))
+    return {"results" : [{"default_whatsapp_number":default_whatsapp_number,"default_whatsapp_type":default_whatsapp_type}]}
+# ==========================================================================================
+
 def is_limited_user(user):
     roles = frappe.get_roles(user)
     limited_roles = ["Customer", "Supplier", "Student", "Instructor", "Sales Partner", "Member", "Shareholder", "Guardian"]
@@ -341,7 +352,7 @@ def create_channel(channel_name , users, type , last_message , creator_email , c
     })
     room_doc.insert(ignore_permissions=True)
     for user in json.loads(users):
-        room_doc.append("members" , {"profile_id" : get_profile_id(user["email"]) ,"user" : user["email"] , "platform" : "Chat"})
+        room_doc.append("members" , {"profile_id" : get_profile_id(user["email"]) ,"user" : user["email"] , "platform" : user["platform"], "platform_profile": user.get("platform_profile"), "platform_gateway": user.get("platform_gateway")})
         share_doctype("ClefinCode Chat Channel", room_doc.name, user["email"])
     room_doc.save(ignore_permissions=True)
     frappe.db.commit()
@@ -368,17 +379,8 @@ def create_group(selected_contacts_list , user , creation_date = None):
     email_dict = {}
 
     for user in json.loads(selected_contacts_list):
-        room_doc.append("members" , {"profile_id" : user["profile_id"] , "user" : user["email"] , "platform" :user["platform"]})
-        share_doctype("ClefinCode Chat Channel", room_doc.name, user["email"])
-        # if email in email_dict:
-            # If the email already exists, append the type with a hyphen
-            # if platform not in email_dict[email]:
-            #     email_dict[email] += f'-{platform}'
-        # else:
-        #     email_dict[email] = platform
-
-    # for email, platform in email_dict.items():
-        
+        room_doc.append("members" , {"profile_id" : get_profile_id(user["email"]) , "user" : user["email"] , "platform" :user["platform"], "platform_profile": user.get("platform_profile"), "platform_gateway": user.get("platform_gateway")})
+        share_doctype("ClefinCode Chat Channel", room_doc.name, user["email"])    
 
     room_doc.save(ignore_permissions=True)
     frappe.db.commit()
@@ -569,138 +571,146 @@ def leave_contributor(parent_channel , user , creation_date = None , last_active
         return {"results" : [{"channel" : sub_channel_doc.name}]}
 # ==========================================================================================
 @frappe.whitelist()
-def get_channels_list(user_email , limit = 10 , offset = 0):
-    results = frappe.db.sql(f"""
-    SELECT
-    ChatChannel.name AS room,
-    NULL AS parent_channel,
-    NULL AS contact ,
-    ChatChannel.modified_date AS send_date,
-    last_message,
-    last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
-    channel_name,
-    type,
-    NULL AS is_removed,
-    NULL AS remove_date,
-    NULL AS is_website_support_group
+def get_channels_list(user_email, limit=10, offset=0):
+    # Using parameterized queries to prevent SQL injection and improve performance
+    user_email_param = frappe.db.escape(user_email)
 
-    FROM `tabClefinCode Chat Channel` AS ChatChannel 
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = '{user_email}'
-    WHERE type = 'Guest'
-    
-    UNION ALL
-                            
-    SELECT 
-    DISTINCT ChatChannel.name AS room,
-    NULL AS parent_channel,
-    NULL AS contact ,
-    ChatChannel.modified_date AS send_date ,
-    last_message,
-    ChatChannelUser.channel_last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
-    channel_name,
-    type,
-    ChatChannelUser.is_removed AS is_removed,
-    ChatChannelUser.remove_date,
-    is_website_support_group
+    results = frappe.db.sql(
+        f"""
+        SELECT
+            ChatChannel.name AS room,
+            NULL AS parent_channel,
+            NULL AS contact,
+            ChatChannel.modified_date AS send_date,
+            last_message,
+            last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
+            channel_name,
+            type,
+            NULL AS is_removed,
+            NULL AS remove_date,
+            NULL AS is_website_support_group
+        FROM `tabClefinCode Chat Channel` AS ChatChannel 
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  
+            ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
+        WHERE type = 'Guest'
+        UNION ALL
+        SELECT DISTINCT
+            ChatChannel.name AS room,
+            NULL AS parent_channel,
+            NULL AS contact,
+            ChatChannel.modified_date AS send_date,
+            last_message,
+            ChatChannelUser.channel_last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
+            channel_name,
+            type,
+            ChatChannelUser.is_removed AS is_removed,
+            ChatChannelUser.remove_date,
+            is_website_support_group
+        FROM `tabClefinCode Chat Channel` AS ChatChannel 
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  
+            ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
+        WHERE type = 'Group' AND ChatChannelUser.platform = 'Chat'
+        UNION ALL
+        SELECT
+            ChatChannel.name AS room,
+            NULL AS parent_channel,
+            ChatChannelUser2.user AS contact,
+            ChatChannel.modified_date AS send_date,
+            last_message,
+            last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
+            channel_name,
+            type,
+            NULL AS is_removed,
+            NULL AS remove_date,
+            NULL AS is_website_support_group
+        FROM `tabClefinCode Chat Channel` AS ChatChannel
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser
+            ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser2
+            ON ChatChannelUser2.parent = ChatChannel.name AND ChatChannelUser2.user <> {user_email_param}
+                        AND type = 'Direct' AND is_parent = 1
+        UNION ALL
+        SELECT
+            ChatChannelContributor.channel AS room,
+            ChatChannel.name AS parent_channel,
+            ChatChannel.channel_creator AS contact,
+            ChatChannel.modified_date AS send_date,
+            ChatChannel.last_message,
+            NULL AS user_unread_messages,
+            NULL AS channel_name,
+            'Contributor' AS type,
+            NULL AS is_removed,
+            NULL AS remove_date,
+            is_website_support_group
+        FROM `tabClefinCode Chat Channel` AS ChatChannel
+        INNER JOIN `tabClefinCode Chat Channel Contributor` AS ChatChannelContributor
+            ON ChatChannelContributor.parent = ChatChannel.name
+            AND is_parent = 1 AND ChatChannelContributor.user = {user_email_param}
+        GROUP BY ChatChannelContributor.user, ChatChannel.name
+        """,
+        as_dict=True
+    )
 
-    FROM `tabClefinCode Chat Channel` AS ChatChannel 
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = '{user_email}'
-    WHERE type = 'Group' AND ChatChannelUser.platform = "Chat"
-
-    UNION ALL
-
-    SELECT 
-    ChatChannel.name AS room,
-    NULL AS parent_channel,
-    ChatChannelUser2.user AS contact ,
-    ChatChannel.modified_date AS send_date,
-    last_message,
-    last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
-    channel_name,
-    type,
-    NULL AS is_removed,
-    NULL AS remove_date,
-    NULL AS is_website_support_group
-
-    FROM `tabClefinCode Chat Channel` AS ChatChannel
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = '{user_email}'
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser2  ON ChatChannelUser2.parent = ChatChannel.name AND ChatChannelUser2.user <> '{user_email}'
-    AND type = 'Direct' AND is_parent = 1
-    
-
-    UNION ALL
-
-    SELECT 
-        ChatChannelContributor.channel AS room, 
-        ChatChannel.name AS parent_channel,
-        ChatChannel.channel_creator AS contact, 
-        ChatChannel.modified_date AS send_date, 
-        ChatChannel.last_message,
-        NULL AS user_unread_messages,
-        NULL AS channel_name,
-        'Contributor' AS type,
-        NULL AS is_removed,
-        NULL AS remove_date,
-        is_website_support_group
-
-    FROM `tabClefinCode Chat Channel` AS ChatChannel  INNER JOIN `tabClefinCode Chat Channel Contributor` AS ChatChannelContributor On
-    ChatChannelContributor.parent = ChatChannel.name
-    AND is_parent = 1 AND ChatChannelContributor.user = '{user_email}'
-    GROUP BY ChatChannelContributor.user , ChatChannel.name
-        
-    """ , as_dict = True)
+    # Fetch additional information only if necessary
     if results:
         for room in results:
-            if not room.channel_name or room.channel_name == "":
-                if room.type == "Direct":
-                    room.room_name = get_contact_full_name(room.contact)
-                    last_message_info = frappe.db.sql(f""" SELECT sender_email,  message_type FROM `tabClefinCode Chat Message` WHERE chat_channel = '{room.room}' ORDER BY send_date DESC LIMIT 1""" , as_dict = True)[0]
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-                elif room.type == "Contributor":
-                    room.room_name = "@" + frappe.get_doc("ClefinCode Chat Channel" , room.parent_channel).get_channel_name_for_contributor()
-                    last_message_info = get_last_sub_channel_for_user(room.parent_channel , user_email)
-                    # content = last_message_info.content
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-                    room.last_message = last_message_info.content if last_message_info.content else ""
-                    room.send_date = get_last_sub_channel_for_user(room.parent_channel , user_email).send_date
-                    room.user_unread_messages = contributor_unread_messages(user_email , room.parent_channel)
-                elif room.type == "Group":
-                    room.room_name = frappe.get_doc("ClefinCode Chat Channel" , room.room).get_group_name()
-                    last_message_info = get_last_message_info(user_email , room.room)
-                    room.last_message = last_message_info.content
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-
+            if not room.get('channel_name'):
+                last_message_info = None
+                if room['type'] == "Direct":
+                    room['room_name'] = get_contact_full_name(room['contact'])
+                    last_message_info = get_last_message_info(user_email, room['room'])
+                elif room['type'] == "Contributor":
+                    room['room_name'] = "@" + frappe.get_doc("ClefinCode Chat Channel", room['parent_channel']).get_channel_name_for_contributor()
+                    last_message_info = get_last_sub_channel_for_user(room['parent_channel'], user_email)
+                    room['send_date'] = last_message_info['send_date']
+                    room['user_unread_messages'] = contributor_unread_messages(user_email, room['parent_channel'])
+                elif room['type'] == "Group":
+                    room['room_name'] = frappe.get_doc("ClefinCode Chat Channel", room['room']).get_group_name()
+                    last_message_info = get_last_message_info(user_email, room['room'])
                 else:
-                    room.room_name = get_contact_full_name(room.contact)
-
+                    room['room_name'] = get_contact_full_name(room['contact'])
+                
+                if last_message_info:
+                    room.update({
+                        'sender_email': last_message_info['sender_email'],
+                        'last_message_type': last_message_info['message_type'],
+                        'last_message': last_message_info.get('content', '')
+                    })
             else:
-                room.room_name = room.channel_name
-                if room.type != "Guest":                
-                    last_message_info = get_last_message_info(user_email , room.room)
-                    room.last_message = last_message_info.content
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-            
-            if room.is_removed == 1:
-                last_message_info = get_last_message_info(user_email , room.room , room.remove_date)
-                room.last_message = last_message_info.content
-                room.sender_email = last_message_info.sender_email
-                room.last_message_type = last_message_info.message_type
-                room.send_date = room.remove_date
-            
-            room.utc_message_date = room.send_date
-            room.send_date = convert_utc_to_user_timezone(room.send_date, get_user_timezone(user_email)["results"][0]["time_zone"])
-            room.last_message_media_type , room.last_message_voice_duration = get_last_message_type(room.type, user_email, room.room if room.type != "Contributor" else room.parent_channel, room.remove_date)
-            room.avatar_url = frappe.db.get_value("ClefinCode Chat Channel" , room.room , "channel_image")
+                room['room_name'] = room['channel_name']
+                if room['type'] != "Guest":
+                    last_message_info = get_last_message_info(user_email, room['room'])
+                    if last_message_info:
+                        room.update({
+                            'last_message': last_message_info['content'],
+                            'sender_email': last_message_info['sender_email'],
+                            'last_message_type': last_message_info['message_type']
+                        })
 
-            chat_topic = frappe.get_all("ClefinCode Chat Topic" , "name" , {"chat_channel":room.parent_channel if room.type == "Contributor" else room.room , "topic_status" : "Open"})
-            room.chat_topic = chat_topic[0].name if chat_topic else None
-                       
-    
-    return {"results" : sorted(results, key=lambda d: d["send_date"], reverse=True) , "num_of_results" : len(results) }
+            # Handle removed rooms
+            if room.get('is_removed') == 1:
+                last_message_info = get_last_message_info(user_email, room['room'], room['remove_date'])
+                if last_message_info:
+                    room.update({
+                        'last_message': last_message_info['content'],
+                        'sender_email': last_message_info['sender_email'],
+                        'last_message_type': last_message_info['message_type'],
+                        'send_date': room['remove_date']
+                    })
+
+            # Convert date and fetch additional details
+            room['utc_message_date'] = room['send_date']
+            room['send_date'] = convert_utc_to_user_timezone(room['send_date'], get_user_timezone(user_email)["results"][0]["time_zone"])
+            room['last_message_media_type'], room['last_message_voice_duration'] = get_last_message_type(room['type'], user_email, room['room'] if room['type'] != "Contributor" else room['parent_channel'], room.get('remove_date'))
+            room['avatar_url'] = frappe.db.get_value("ClefinCode Chat Channel", room['room'], "channel_image")
+
+            # Fetch chat topic if it exists
+            chat_topic = frappe.get_all("ClefinCode Chat Topic", "name", {"chat_channel": room['parent_channel'] if room['type'] == "Contributor" else room['room'], "topic_status": "Open"})
+            room['chat_topic'] = chat_topic[0].name if chat_topic else None
+
+    return {"results": sorted(results, key=lambda d: d["send_date"], reverse=True), "num_of_results": len(results)}
+
+
 # ==========================================================================================
 def get_last_sub_channel(room):    
     last_sub_channel = frappe.db.sql(f"""
@@ -742,7 +752,7 @@ def get_last_sub_channel_for_user(parent_channel , user_email):
     LIMIT 1
     """ , as_dict = True)   
     
-    return last_sub_channel_message[0]
+    return last_sub_channel_message[0] if last_sub_channel_message else ''
 # ==========================================================================================
 @frappe.whitelist()
 def get_last_active_sub_channel(room):    
@@ -813,7 +823,11 @@ def send(content, user, room , email, send_date = None , is_first_message = 0, a
                 "is_media" : is_media if is_media else 0,            
                 "is_document" : is_document if is_document else 0,
                 "is_voice_clip" : is_voice_clip if is_voice_clip else 0,
+<<<<<<< HEAD
                 "is_call" : is_call if is_call else 0,
+=======
+                "is_mention": is_mention(content),
+>>>>>>> develop
                 "file_id" : file_id,            
                 "send_date" : send_date,
                 "message_type" : message_type,
@@ -825,13 +839,15 @@ def send(content, user, room , email, send_date = None , is_first_message = 0, a
             }
         ).insert(ignore_permissions=True)
         
-        if is_screenshot == "1":
+        if is_screenshot == "1":  
             content = extract_images_from_html(new_message, content, True)
             is_media = 1
             file_type = "image"
             new_message.content = content
             new_message.is_media = is_media
-            new_message.file_type = file_type       
+            new_message.file_type = file_type
+            new_message.is_screenshot = 1  
+            new_message.file_id = frappe.db.get_value("File" , {"attached_to_name": new_message.name}, "name")               
             new_message.save(ignore_permissions = True)
 
         if attachment: set_attach_message(attachment, new_message.name)
@@ -845,7 +861,9 @@ def send(content, user, room , email, send_date = None , is_first_message = 0, a
         
         channel_doc = frappe.get_doc("ClefinCode Chat Channel" , room)    
         
+        last_responder_user = channel_doc.last_responder_user
         if channel_doc.type == "Group":
+            channel_doc.last_responder_user = get_profile_id(email)
             for member in channel_doc.members:
                 if member.is_removed == 0:
                     member.channel_last_message_number+=1
@@ -973,10 +991,13 @@ def send(content, user, room , email, send_date = None , is_first_message = 0, a
                     frappe.publish_realtime(event="update_room", message=results, user= member.user) # listner in chat list 
                     # frappe.publish_realtime(event="receive_message", message=results, user= member.user) # listner in mobile app
                     frappe.publish_realtime(event="msg", message=results, user= member.user) # listner in full page chat
-                    send_notification(member.user , results, "send_message", room_name if channel_doc.type == "Group" else get_contact_full_name(email), message_template_type)                       
-            
+                    send_notification(member.user , results, "send_message", room_name if channel_doc.type == "Group" else get_contact_full_name(email), message_template_type)    
+                elif member.platform == "WhatsApp" and email != member.user and message_template_type not in ["Rename Group" , "Send Confirmation"]  and not is_mention(content) and member.is_removed == 0:
+                    process_whatsapp_message(member.platform_gateway, member.user , email, channel_doc, last_responder_user, new_message, file_type, attachment, content, is_voice_clip, is_screenshot)
+                    if member.pending_messages >= 1:
+                        frappe.db.set_value('ClefinCode Chat Channel User', member.name, 'pending_messages', member.pending_messages +1)
             for contributor in channel_doc.contributors:
-                if contributor.active == 1 and contributor.platform == "Chat":
+                if contributor.active == 1 and contributor.platform == "Chat":                    
                     if share_everyone == 0: share_doctype("ClefinCode Chat Message", new_message.name, contributor.user)
                     results["room"] = sub_channel
                     results["parent_channel"] = room
@@ -994,6 +1015,7 @@ def send(content, user, room , email, send_date = None , is_first_message = 0, a
         
         return  {"results" : [{"new_message_name" : new_message.name}]}
     except Exception as e:
+        frappe.log_error(title="error in send message" , message = str(e))
         return {"results": [{"status": f"Error: {str(e)}"}]} 
      
 # ==========================================================================================
@@ -1086,134 +1108,140 @@ def get_messages_latest(room , user_email , room_type, remove_date = None , last
 
 # ==========================================================================================
 @frappe.whitelist()
-def get_latest_channels_updates(user_email , last_message_date):
-    """This API provides a solution for iOS devices to view new messages through notifications while using another app."""    
+def get_latest_channels_updates(user_email, last_message_date):
+    """This API provides a solution for iOS devices to view new messages through notifications while using another app."""
+    user_email_param = frappe.db.escape(user_email)
+    last_message_date_param = frappe.db.escape(last_message_date)
 
-    results = frappe.db.sql(f"""
-    SELECT
-    ChatChannel.name AS room,
-    NULL AS parent_channel,
-    NULL AS contact ,
-    ChatChannel.modified_date AS send_date,
-    last_message,
-    last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
-    channel_name,
-    type,
-    NULL AS is_removed,
-    NULL AS remove_date
+    results = frappe.db.sql(
+        f"""
+        SELECT
+            ChatChannel.name AS room,
+            NULL AS parent_channel,
+            NULL AS contact,
+            ChatChannel.modified_date AS send_date,
+            last_message,
+            last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
+            channel_name,
+            type,
+            NULL AS is_removed,
+            NULL AS remove_date
+        FROM `tabClefinCode Chat Channel` AS ChatChannel 
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser
+            ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
+        WHERE type = 'Guest' AND ChatChannel.modified_date > {last_message_date_param}
+        UNION ALL
+        SELECT DISTINCT
+            ChatChannel.name AS room,
+            NULL AS parent_channel,
+            NULL AS contact,
+            ChatChannel.modified_date AS send_date,
+            last_message,
+            ChatChannelUser.channel_last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
+            channel_name,
+            type,
+            ChatChannelUser.is_removed AS is_removed,
+            ChatChannelUser.remove_date
+        FROM `tabClefinCode Chat Channel` AS ChatChannel 
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser
+            ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
+        WHERE type = 'Group' AND ChatChannelUser.platform = 'Chat' AND ChatChannel.modified_date > {last_message_date_param}
+        UNION ALL
+        SELECT
+            ChatChannel.name AS room,
+            NULL AS parent_channel,
+            ChatChannelUser2.user AS contact,
+            ChatChannel.modified_date AS send_date,
+            last_message,
+            last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
+            channel_name,
+            type,
+            NULL AS is_removed,
+            NULL AS remove_date
+        FROM `tabClefinCode Chat Channel` AS ChatChannel
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser
+            ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = {user_email_param}
+        INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser2
+            ON ChatChannelUser2.parent = ChatChannel.name AND ChatChannelUser2.user <> {user_email_param}
+                            AND type = 'Direct' AND is_parent = 1 AND ChatChannel.modified_date > {last_message_date_param}
+        UNION ALL
+        SELECT
+            ChatChannelContributor.channel AS room,
+            ChatChannel.name AS parent_channel,
+            ChatChannel.channel_creator AS contact,
+            ChatChannel.modified_date AS send_date,
+            ChatChannel.last_message,
+            NULL AS user_unread_messages,
+            NULL AS channel_name,
+            'Contributor' AS type,
+            NULL AS is_removed,
+            NULL AS remove_date
+        FROM `tabClefinCode Chat Channel` AS ChatChannel
+        INNER JOIN `tabClefinCode Chat Channel Contributor` AS ChatChannelContributor
+            ON ChatChannelContributor.parent = ChatChannel.name
+            AND is_parent = 1 AND ChatChannelContributor.user = {user_email_param}
+            AND ChatChannel.modified_date > {last_message_date_param}
+        GROUP BY ChatChannelContributor.user, ChatChannel.name
+        """,
+        as_dict=True
+    )
 
-    FROM `tabClefinCode Chat Channel` AS ChatChannel 
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = '{user_email}'
-    WHERE type = 'Guest' AND ChatChannel.modified_date > '{last_message_date}'
-    
-    UNION ALL
-                            
-    SELECT 
-    DISTINCT ChatChannel.name AS room,
-    NULL AS parent_channel,
-    NULL AS contact ,
-    ChatChannel.modified_date AS send_date ,
-    last_message,
-    ChatChannelUser.channel_last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
-    channel_name,
-    type,
-    ChatChannelUser.is_removed AS is_removed,
-    ChatChannelUser.remove_date
-
-    FROM `tabClefinCode Chat Channel` AS ChatChannel 
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = '{user_email}'
-    WHERE type = 'Group' AND ChatChannelUser.platform = "Chat" AND ChatChannel.modified_date > '{last_message_date}'
-
-    UNION ALL
-
-    SELECT 
-    ChatChannel.name AS room,
-    NULL AS parent_channel,
-    ChatChannelUser2.user AS contact ,
-    ChatChannel.modified_date AS send_date,
-    last_message,
-    last_message_number - ChatChannelUser.last_message_read AS user_unread_messages,
-    channel_name,
-    type,
-    NULL AS is_removed,
-    NULL AS remove_date
-
-    FROM `tabClefinCode Chat Channel` AS ChatChannel
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser  ON ChatChannelUser.parent = ChatChannel.name AND ChatChannelUser.user = '{user_email}'
-    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser2  ON ChatChannelUser2.parent = ChatChannel.name AND ChatChannelUser2.user <> '{user_email}'
-    AND type = 'Direct' AND is_parent = 1 AND ChatChannel.modified_date > '{last_message_date}'
-    
-
-    UNION ALL
-
-    SELECT 
-        ChatChannelContributor.channel AS room, 
-        ChatChannel.name AS parent_channel,
-        ChatChannel.channel_creator AS contact, 
-        ChatChannel.modified_date AS send_date, 
-        ChatChannel.last_message,
-        NULL AS user_unread_messages,
-        NULL AS channel_name,
-        'Contributor' AS type,
-        NULL AS is_removed,
-        NULL AS remove_date
-
-    FROM `tabClefinCode Chat Channel` AS ChatChannel  INNER JOIN `tabClefinCode Chat Channel Contributor` AS ChatChannelContributor On
-    ChatChannelContributor.parent = ChatChannel.name
-    AND is_parent = 1 AND ChatChannelContributor.user = '{user_email}'AND ChatChannel.modified_date > '{last_message_date}'
-    GROUP BY ChatChannelContributor.user , ChatChannel.name 
-        
-    """ , as_dict = True)
     if results:
         for room in results:
-            if not room.channel_name or room.channel_name == "":
-                if room.type == "Direct":
-                    room.room_name = get_contact_full_name(room.contact)
-                    last_message_info = frappe.db.sql(f""" SELECT sender_email,  message_type FROM `tabClefinCode Chat Message` WHERE chat_channel = '{room.room}' ORDER BY send_date DESC LIMIT 1""" , as_dict = True)[0]
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-                elif room.type == "Contributor":
-                    room.room_name = "@" + frappe.get_doc("ClefinCode Chat Channel" , room.parent_channel).get_channel_name_for_contributor()
-                    last_message_info = get_last_sub_channel_for_user(room.parent_channel , user_email)
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-                    room.last_message = last_message_info.content if last_message_info.content else ""
-                    room.send_date = get_last_sub_channel_for_user(room.parent_channel , user_email).send_date
-                    room.user_unread_messages = contributor_unread_messages(user_email , room.parent_channel)
-                elif room.type == "Group":
-                    room.room_name = frappe.get_doc("ClefinCode Chat Channel" , room.room).get_group_name()
-                    last_message_info = get_last_message_info(user_email , room.room)
-                    room.last_message = last_message_info.content
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-
+            if not room.get('channel_name'):
+                last_message_info = None
+                if room['type'] == "Direct":
+                    room['room_name'] = get_contact_full_name(room['contact'])
+                    last_message_info = get_last_message_info(user_email, room['room'])
+                elif room['type'] == "Contributor":
+                    room['room_name'] = "@" + frappe.get_doc("ClefinCode Chat Channel", room['parent_channel']).get_channel_name_for_contributor()
+                    last_message_info = get_last_sub_channel_for_user(room['parent_channel'], user_email)
+                    room['send_date'] = last_message_info['send_date']
+                    room['user_unread_messages'] = contributor_unread_messages(user_email, room['parent_channel'])
+                elif room['type'] == "Group":
+                    room['room_name'] = frappe.get_doc("ClefinCode Chat Channel", room['room']).get_group_name()
+                    last_message_info = get_last_message_info(user_email, room['room'])
                 else:
-                    room.room_name = get_contact_full_name(room.contact)
-
+                    room['room_name'] = get_contact_full_name(room['contact'])
+                
+                if last_message_info:
+                    room.update({
+                        'sender_email': last_message_info['sender_email'],
+                        'last_message_type': last_message_info['message_type'],
+                        'last_message': last_message_info.get('content', '')
+                    })
             else:
-                room.room_name = room.channel_name
-                if room.type != "Guest":                
-                    last_message_info = get_last_message_info(user_email , room.room)
-                    room.last_message = last_message_info.content
-                    room.sender_email = last_message_info.sender_email
-                    room.last_message_type = last_message_info.message_type
-            
-            if room.is_removed == 1:
-                last_message_info = get_last_message_info(user_email , room.room , room.remove_date)
-                room.last_message = last_message_info.content
-                room.sender_email = last_message_info.sender_email
-                room.last_message_type = last_message_info.message_type
-                room.send_date = room.remove_date
-            
-            room.utc_message_date = room.send_date
-            room.send_date = convert_utc_to_user_timezone(room.send_date, get_user_timezone(user_email)["results"][0]["time_zone"])
-            # room.last_message_media_type , room.last_message_voice_duration = get_last_message_type(room.type, user_email, room.room if room.type != "Contributor" else room.parent_channel, room.remove_date)
+                room['room_name'] = room['channel_name']
+                if room['type'] != "Guest":
+                    last_message_info = get_last_message_info(user_email, room['room'])
+                    if last_message_info:
+                        room.update({
+                            'last_message': last_message_info['content'],
+                            'sender_email': last_message_info['sender_email'],
+                            'last_message_type': last_message_info['message_type']
+                        })
 
-            chat_topic = frappe.get_all("ClefinCode Chat Topic" , "name" , {"chat_channel":room.parent_channel if room.type == "Contributor" else room.room , "topic_status" : "Open"})
-            room.chat_topic = chat_topic[0].name if chat_topic else None
-                       
-    
-    return {"results" : sorted(results, key=lambda d: d["send_date"], reverse=True)}
+            # Handle removed rooms
+            if room.get('is_removed') == 1:
+                last_message_info = get_last_message_info(user_email, room['room'], room['remove_date'])
+                if last_message_info:
+                    room.update({
+                        'last_message': last_message_info['content'],
+                        'sender_email': last_message_info['sender_email'],
+                        'last_message_type': last_message_info['message_type'],
+                        'send_date': room['remove_date']
+                    })
+
+            # Convert date and fetch additional details
+            room['utc_message_date'] = room['send_date']
+            room['send_date'] = convert_utc_to_user_timezone(room['send_date'], get_user_timezone(user_email)["results"][0]["time_zone"])
+
+            # Fetch chat topic if it exists
+            chat_topic = frappe.get_all("ClefinCode Chat Topic", "name", {"chat_channel": room['parent_channel'] if room['type'] == "Contributor" else room['room'], "topic_status": "Open"})
+            room['chat_topic'] = chat_topic[0].name if chat_topic else None
+
+    return {"results": sorted(results, key=lambda d: d["send_date"], reverse=True)}
+
 # ==========================================================================================
 @frappe.whitelist()
 def mark_messsages_as_read(user , channel = None, parent_channel = None):
@@ -1285,34 +1313,37 @@ def update_sub_channel_for_last_message(user , user_email , mentioned_users_emai
         send_notification(member , results, "update_sub_channel_for_last_message") 
           
 # ==========================================================================================
-def get_last_message_info(user_email , channel , remove_date = None):
-    condition = ""
-    if remove_date:
-        condition = f" send_date <= '{remove_date}' AND "
-    return frappe.db.sql(f"""
-    SELECT content , send_date , message_type, sender_email
-    FROM `tabClefinCode Chat Message`
-    WHERE {condition} chat_channel = '{channel}' 
-    AND (only_receive_by IS NULL OR only_receive_by = '')
-     
-
-    UNION
-
-    SELECT content , send_date , message_type, sender_email
-    FROM `tabClefinCode Chat Message`
-    WHERE {condition} chat_channel = '{channel}' 
-    AND only_receive_by = '{user_email}'
+def get_last_message_info(user_email, channel, remove_date=None):
+    query = """
+        SELECT content, send_date, message_type, sender_email
+        FROM `tabClefinCode Chat Message`
+        WHERE chat_channel = %(channel)s
+        AND (only_receive_by IS NULL OR only_receive_by = '' OR only_receive_by = %(user_email)s)
+    """
+    filters = {
+        "channel": channel,
+        "user_email": user_email
+    }
     
+    if remove_date:
+        query += " AND send_date <= %(remove_date)s"
+        filters["remove_date"] = remove_date
 
-    ORDER BY send_date DESC 
-    LIMIT 1
-    """ , as_dict = True)[0]
+    query += " ORDER BY send_date DESC LIMIT 1"
+
+    try:
+        result = frappe.db.sql(query, filters, as_dict=True)
+        return result[0] if result else None
+    except Exception as e:
+        frappe.log_error(message=str(e), title="Error fetching last message info")
+        return None
+
 # ==========================================================================================
 @frappe.whitelist()
 def get_last_message_type(room_type, user_email , channel, remove_date = None):
     last_message = None
     if room_type == "Contributor":
-        last_message = get_last_sub_channel_for_user(channel , user_email).name
+        last_message = getattr(get_last_sub_channel_for_user(channel, user_email), 'name', None)
     else:
         condition = ''
         if remove_date:
@@ -1337,14 +1368,16 @@ def get_last_message_type(room_type, user_email , channel, remove_date = None):
         
         if last_message and last_message[0]:
             last_message = last_message[0][0]
-        
-    chat_message = frappe.get_doc("ClefinCode Chat Message", last_message)
-    if not chat_message.file_type or chat_message.file_type == '':
-        return "text" , None
-    elif chat_message.file_type == 'audio' and chat_message.is_voice_clip:
-        duration = calculate_voice_clip_duration(chat_message.file_id)
-        return "voice clip", duration["results"][0]["duration"]
-    return chat_message.file_type, None
+    
+    if last_message:
+        chat_message = frappe.get_doc("ClefinCode Chat Message", last_message)
+        if not chat_message.file_type or chat_message.file_type == '':
+            return "text" , None
+        elif chat_message.file_type == 'audio' and chat_message.is_voice_clip:
+            duration = calculate_voice_clip_duration(chat_message.file_id)
+            return "voice clip", duration["results"][0]["duration"]
+        return chat_message.file_type, None
+    else: return None, None
 # ========================================================================================== 
 #############################################################################################
 ######################################## Handling with Groups ###############################
@@ -1396,7 +1429,7 @@ def add_group_member(new_members ,room , last_active_sub_channel = None):
         else:
             # it must get the new version of parent if we added multiple members, at least one of them was old member
             parent = frappe.get_doc("ClefinCode Chat Channel",room)
-            parent.append('members', {"profile_id": member["profile_id"], 'user': member["email"] , "platform" : member["platform"] ,"channel_last_message_number" : parent.last_message_number ,"last_message_read" : parent.last_message_number})
+            parent.append('members', {"profile_id": get_profile_id(member["email"]), 'user': member["email"] , "platform" : member["platform"] , "platform_profile": member.get("platform_profile"), "platform_gateway": member.get("platform_gateway") , "channel_last_message_number" : parent.last_message_number ,"last_message_read" : parent.last_message_number})
             share_doctype("ClefinCode Chat Channel", room, member["email"])
             for msg in previous_messages:
                 share_doctype("ClefinCode Chat Message", msg.name, member["email"])
@@ -1442,7 +1475,7 @@ def add_group_member(new_members ,room , last_active_sub_channel = None):
     return {"results" : [{"new_members" : new_members}]}
 # ==========================================================================================
 @frappe.whitelist()
-def remove_group_member(email,room , last_active_sub_channel = None):
+def remove_group_member(email, room , last_active_sub_channel = None):
     remove_date = datetime.datetime.utcnow()
     parent = frappe.get_doc("ClefinCode Chat Channel" , room)
     old_member=frappe.get_all("ClefinCode Chat Channel User", 
@@ -1827,7 +1860,7 @@ def get_file_type(file_name):
     mime_type = mimetypes.guess_type(file_name)[0]
     if mime_type and mime_type.startswith('image/') or ext == '.webp' :
         return 'image'
-    elif ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt']:
+    elif ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.zip' , '.rar', 'csv' , 'ppsx']:
         return 'document'
     else:
         return mime_type.split('/')[0] if mime_type else ""
@@ -2299,8 +2332,7 @@ def get_contacts(user_email):
         ON Contact.name = ChatProfile.contact
     LEFT OUTER JOIN `tabUser` AS User
         ON User.name = Contact.user                     
-    WHERE (User.enabled = 1 OR User.enabled IS NULL) AND ContactDetails.type IN ("Chat", "Email")
-    AND ContactDetails.contact_info <> %s
+    WHERE (User.enabled = 1 OR User.enabled IS NULL) AND ContactDetails.contact_info <> %s
     ORDER BY Contact.user DESC
     """ , (user_email) , as_dict = True)    
     
@@ -2316,7 +2348,39 @@ def get_contacts(user_email):
         contact['contact_details'] = frappe.db.sql("""
             SELECT contact_info, type AS contact_type, `default`
             FROM `tabClefinCode Chat Profile Contact Details`
-            WHERE parent = %s AND type IN ('Chat', 'Email')
+            WHERE parent = %s
+        """, (contact['profile_id'],), as_dict=True)
+
+    return {"results": [{"contacts": filtered_contacts}]}       
+# ==========================================================================================
+@frappe.whitelist()
+def get_contacts_for_new_group(user_email):    
+    contacts_list = frappe.db.sql(f"""
+    SELECT DISTINCT ChatProfile.name AS profile_id , ChatProfile.full_name , Contact.user AS user_id, User.enabled
+    FROM `tabClefinCode Chat Profile` AS ChatProfile INNER JOIN `tabClefinCode Chat Profile Contact Details` AS ContactDetails 
+        ON ContactDetails.parent = ChatProfile.name
+    INNER JOIN `tabContact` AS Contact
+        ON Contact.name = ChatProfile.contact
+    LEFT OUTER JOIN `tabUser` AS User
+        ON User.name = Contact.user                     
+    WHERE (User.enabled = 1 OR User.enabled IS NULL) AND ContactDetails.contact_info <> %s
+    AND ContactDetails.type = 'Chat'
+    ORDER BY Contact.user DESC
+    """ , (user_email) , as_dict = True)    
+    
+    filtered_contacts = []
+    if is_limited_user(user_email):
+        filtered_contacts = [
+            contact for contact in contacts_list if contact.get("user_id") and not is_limited_user(contact.get("user_id"))
+        ]
+    else:
+        filtered_contacts = contacts_list
+
+    for contact in filtered_contacts:
+        contact['contact_details'] = frappe.db.sql("""
+            SELECT contact_info, type AS contact_type, `default`
+            FROM `tabClefinCode Chat Profile Contact Details`
+            WHERE parent = %s AND type = 'Chat'
         """, (contact['profile_id'],), as_dict=True)
 
     return {"results": [{"contacts": filtered_contacts}]}       
@@ -2336,7 +2400,7 @@ def get_contacts_for_adding_to_group(user_email , existing_members , existing_co
     WHERE (User.enabled = 1 OR User.enabled IS NULL)         
     AND ContactDetails.verified = 1
     AND ContactDetails.contact_info != %s
-    AND ContactDetails.type = 'Chat'    
+    AND ContactDetails.type = 'Chat'   
     ORDER BY ChatProfile.creation DESC
     """
     contacts_list = frappe.db.sql(contacts_query, (user_email,), as_dict=True)
@@ -2345,7 +2409,7 @@ def get_contacts_for_adding_to_group(user_email , existing_members , existing_co
         details_query = """
         SELECT contact_info, type AS contact_type, `default`
         FROM `tabClefinCode Chat Profile Contact Details`
-        WHERE parent = %s AND type = "Chat"
+        WHERE parent = %s AND type = 'Chat'
         """
         contact['contact_details'] = frappe.db.sql(details_query, (contact['profile_id'],), as_dict=True)    
 
@@ -2368,6 +2432,9 @@ def filter_contact_list(contacts_list, existing_members):
                 if len(profile['contact_details']) == 0:
                     removed_profiles.append(profile)
     return contacts_list, removed_profiles 
+# ==========================================================================================
+def get_chat_profile_first_name(chat_profile):
+    return frappe.db.get_value("ClefinCode Chat Profile", chat_profile , "full_name").split(' ')[0]
 # ==========================================================================================
 def get_contact_first_name(contact):
     return frappe.db.sql(f"""
@@ -2578,6 +2645,308 @@ def search_in_message_contents(channel , query, sub_channel = None):
         frappe.log_error(f"Error in search_in_message_contents: {str(e)}")  # Log the error for debugging
         return {"results" : [{"error" : str(e)}]}
     
+# ==========================================================================================
+#############################################################################################
+######################################## WhatsApp Functions #################################
+#############################################################################################
+def process_whatsapp_message(platform_gateway, whatsapp_customer_number , email, channel_doc, last_responder_user, new_message, file_type, attachment, content, is_voice_clip, is_screenshot):    
+    responder_user_profile = get_profile_id(email)     
+    message = None
+    is_group_message = (channel_doc.type == "Group" and 
+                        last_responder_user and 
+                        last_responder_user != responder_user_profile and 
+                        new_message.message_type != "information")
+
+    if new_message.message_type == "information":
+        message_content = process_message_template(content)
+        message = f"_{BeautifulSoup(message_content, 'html.parser').get_text()}_"
+    elif file_type in ["image", "video", "audio", "document"]:
+        if is_screenshot:
+            message = frappe.db.get_value("File" , {"attached_to_name": new_message.name}, "file_url")
+        else:
+            message = attachment
+    else:
+        if is_group_message:
+            message = f"*{get_chat_profile_first_name(responder_user_profile)}*:\n{BeautifulSoup(content, 'html.parser').get_text()}"
+        else:
+            message = BeautifulSoup(content, 'html.parser').get_text()
+
+    send_whatsapp_message(new_message, platform_gateway, whatsapp_customer_number , message, file_type if file_type in ["image", "video", "audio", "document"] else None, is_voice_clip)
+# ==========================================================================================
+def process_message_template(template_html):
+    soup = BeautifulSoup(template_html, 'html.parser')
+
+    spans = soup.find_all('span', {'data-user': True})
+
+    for span in spans:
+        emails = [email.strip() for email in span['data-user'].split(',')]
+
+        full_names = [get_contact_full_name(email) for email in emails]
+
+        combined_names = ', '.join(full_names)
+
+        if 'sender-user' in span.get('class', []):
+            span.insert_after(combined_names + " ")
+        elif 'receiver-user' in span.get('class', []):
+            span.insert_before(" " + combined_names)
+
+    processed_message = ' '.join(soup.stripped_strings)
+    return processed_message
+# ========================================================================================
+def send_whatsapp_message(new_message_doc, sender, receiver, message, message_type="text", is_voice_clip=False):
+    try:
+        access_token = get_access_token()
+        api_base = "https://graph.facebook.com/v17.0"
+        phone_number_id = frappe.db.get_value("ClefinCode WhatsApp Profile", sender, "phone_number_id")
+        endpoint = f"{api_base}/{phone_number_id}/messages"
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+
+        if message_type in ['image', 'video', 'audio', 'document']:
+            media_id, mime_type = upload_media(message, phone_number_id, access_token, is_voice_clip)
+            
+            if message_type == 'image' and mime_type == 'image/webp':
+                response_data = create_media_payload(receiver, media_id, 'sticker')
+            elif message_type == 'document':
+                response_data = create_document_payload(receiver, media_id, message)
+            else:
+                response_data = create_media_payload(receiver, media_id, message_type)
+
+        else:
+            response_data = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": receiver,
+                "type": "text",
+                "text": {
+                    "preview_url": "true",
+                    "body": message
+                }
+            }
+
+        response = requests.post(endpoint, json=response_data, headers=headers)
+
+        if response.ok:
+            new_message_doc.whatsapp_message_id = response.json().get("messages")[0].get("id")
+            new_message_doc.save(ignore_permissions = True)
+            frappe.db.commit()
+        else:
+            frappe.log_error(title="send whatsapp message Failed", message=response.text)
+            
+    except Exception as e:
+        frappe.log_error(title="send whatsapp message Exception", message=str(e))
+
+# ==========================================================================================
+def send_message_confirm_template(platform_gateway, whatsapp_customer_number, channel, message_template):
+    try:       
+        access_token = get_access_token()
+        api_base = "https://graph.facebook.com/v17.0"
+        phone_number_id = frappe.db.get_value("ClefinCode WhatsApp Profile", platform_gateway, "phone_number_id")
+        endpoint = f"{api_base}/{phone_number_id}/messages"
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+
+        meta_template_name = frappe.db.get_value("ClefinCode WhatsApp Template" , message_template, "meta_template_name")
+
+        data = {
+            "messaging_product": "whatsapp",
+            "to": whatsapp_customer_number,
+            "type": "template",
+             "template": {
+                "name": meta_template_name,
+                "language": {
+                    "code": "en"
+                }
+            }
+        }
+
+        response = requests.post(endpoint, json=data, headers=headers)
+
+        if response.ok:
+            frappe.db.set_value('ClefinCode Chat Channel User', {"parent": channel , "user": whatsapp_customer_number, "platform_gateway": platform_gateway}, 'pending_messages', 1)
+            frappe.db.commit()
+        else:
+            frappe.log_error(title="send whatsapp message template Failed", message=response.text)
+            
+    except Exception as e:
+        frappe.log_error(title="send whatsapp message template Exception", message=str(e))
+
+# ==========================================================================================
+def create_media_payload(receiver, media_id, media_type):
+    return {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": receiver,
+        "type": media_type,
+        media_type: {
+            "id": media_id
+        }
+    }
+# ==========================================================================================
+def create_document_payload(receiver, media_id, file_path):
+    return {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": receiver,
+        "type": "document",
+        "document": {
+            "id": media_id,
+            "filename": os.path.basename(file_path)
+        }
+    }
+# ==========================================================================================
+def upload_media(message, phone_number_id, access_token, is_voice_clip=False):
+    try:
+        api_base = "https://graph.facebook.com/v17.0"
+        endpoint = f"{api_base}/{phone_number_id}/media"
+        file_path = frappe.utils.get_site_path(message.lstrip('/'))
+        result_file_path = file_path
+
+        # Convert to OGG format if it's a voice clip
+        if is_voice_clip:
+            result_file_path = convert_to_ogg(file_path)
+
+        # Register MIME types
+        mimetypes.add_type('image/webp', '.webp')
+        mimetypes.add_type('audio/ogg', '.ogg')
+        mime_type, _ = mimetypes.guess_type(result_file_path)
+        
+        files = {
+            'file': (result_file_path, open(result_file_path, 'rb'), mime_type)
+        }
+
+        response = requests.post(endpoint, data={"messaging_product": "whatsapp"}, files=files, headers={"Authorization": f"Bearer {access_token}"})
+
+        if response.json().get("error"):
+            frappe.throw(response.json().get("error").get("message"))
+        
+        if response.ok:
+            return response.json().get("id"), mime_type
+        
+    except Exception as e:
+        frappe.log_error(title="upload_media Failed", message=str(e))
+
+# ==========================================================================================
+def convert_to_ogg(input_file):
+    try:
+        output_file = input_file.rsplit('.', 1)[0] + '.ogg'
+        command = [
+            'ffmpeg',
+            '-i', input_file,
+            '-c:a', 'libopus',
+            '-ac', '1',
+            '-f', 'ogg',
+            '-avoid_negative_ts', 'make_zero',
+            output_file
+        ]
+        subprocess.run(command, check=True)
+        return output_file
+    except subprocess.CalledProcessError as e:
+        frappe.log_error(title="convert_to_ogg Failed", message=str(e))
+        raise e
+# ==========================================================================================
+@frappe.whitelist()
+def get_whatsapp_numbers_for_sender(user_email):
+    whatsapp_numbers_set = set()
+    
+    personal_numbers = frappe.db.sql(f"""
+    SELECT name AS number, type, `default`
+    FROM `tabClefinCode WhatsApp Profile`
+    WHERE type = 'Personal' AND user = '{user_email}'    
+    """, as_dict=True)
+
+    if personal_numbers:
+        for n in personal_numbers:
+            whatsapp_numbers_set.add((n['number'], n['type'], n['default']))
+
+    support_numbers = frappe.db.sql(f"""
+    SELECT DISTINCT wp.name AS number, wp.type, users.`default`
+    FROM `tabClefinCode WhatsApp Profile` AS wp 
+    INNER JOIN `tabAuthorized Users` users ON users.parent = wp.name 
+    WHERE type = 'Support' AND users.user = '{user_email}'    
+    """, as_dict=True)
+
+    if support_numbers:
+        for n in support_numbers:
+            whatsapp_numbers_set.add((n['number'], n['type'], n['default']))
+
+    whatsapp_numbers_list = [dict(number=n[0], type=n[1], default=n[2]) for n in whatsapp_numbers_set]
+
+    return whatsapp_numbers_list
+# ==========================================================================================
+def get_default_whatsapp_number(whatsapp_numbers_list):     
+    for number_info in whatsapp_numbers_list:
+        if number_info['default']:
+            return number_info['number'] , number_info['type']
+    return None, None
+# ==========================================================================================
+@frappe.whitelist()
+def get_whatsapp_number_type(whatsapp_system_number):
+    return frappe.db.get_value("ClefinCode WhatsApp Profile" , whatsapp_system_number, "type")
+# ==========================================================================================
+@frappe.whitelist()
+def get_whatsapp_channel(whatsapp_system_number, whatsapp_contact_number):
+    whatsapp_system_number_type = get_whatsapp_number_type(whatsapp_system_number)
+    
+    if whatsapp_system_number_type == "Support":
+        condition = " AND type = 'Group' AND chat_status = 'Open' "
+    else:
+        condition = " AND type = 'Direct'"    
+
+    results = frappe.db.sql(f"""
+    SELECT ChatChannel.name
+    FROM `tabClefinCode Chat Channel` AS ChatChannel 
+    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser ON ChatChannelUser.parent = ChatChannel.name
+    WHERE ChatChannelUser.user = '{whatsapp_contact_number}' 
+    AND platform_gateway = '{whatsapp_system_number}'
+    AND is_parent = 1
+    AND is_removed = 0
+    AND pending_messages = 0
+    {condition}     
+    """ , as_dict = True)
+    
+    if results:
+        return results[0].name
+# ==========================================================================================    
+@frappe.whitelist()
+def check_if_contact_has_whatsapp_chat(default_whatsapp_number, default_whatsapp_type, contact, platform, user_email):
+    condition = " AND type = 'Direct'"
+    if default_whatsapp_type == "Support":
+        condition = " AND type = 'Group' AND chat_status = 'Open' "
+
+    results = frappe.db.sql(f"""
+    SELECT ChatChannel.name
+    FROM `tabClefinCode Chat Channel` AS ChatChannel 
+    INNER JOIN `tabClefinCode Chat Channel User` AS ChatChannelUser ON ChatChannelUser.parent = ChatChannel.name
+    WHERE ChatChannelUser.user = '{contact}' 
+    AND platform_gateway = '{default_whatsapp_number}'
+    AND ChatChannelUser.platform = '{platform}'
+    AND is_parent = 1
+    AND is_removed = 0
+    {condition}     
+    """ , as_dict = True) 
+    
+    if results:
+        user_exists = False
+        room_name = None
+        if default_whatsapp_type == "Support":
+            room_doc = frappe.get_doc("ClefinCode Chat Channel" , results[0].name)   
+            room_name = get_room_name(results[0].name, "Group")                
+            viewer_exists = False
+            for m in room_doc.members:
+                if m.user == user_email:
+                    user_exists = True                    
+                    break            
+
+        return {"results" : [{"room": results[0].name , "user_exists" : user_exists, "room_name" : room_name}]}
+    else:
+         return {"results" : []}
 # ==========================================================================================
 #############################################################################################
 ######################################## Helper Functions ###################################
@@ -3066,6 +3435,9 @@ def disable_contributors( parent_channel , last_active_sub_channel = None , user
 
 #=======================================================================================================
 def share_doctype(doctype, docname, user = None, everyone = 0):
+    if user and not frappe.db.exists("User", user):
+        return
+    
     if int(frappe_version.split('.')[0]) > 13:
         from frappe.share import add_docshare as docshare
     else:
@@ -3190,3 +3562,10 @@ def push_notifications(registration_token, information, realtime_type, platform 
 def convert_to_string_values(data):
     return {key: str(value) for key, value in data.items()}
 # ============================================================================
+def is_mention(content):
+    soup = BeautifulSoup(content, 'html.parser')    
+    if soup.find(class_='mention'):
+        return True
+    
+    return False
+# ========================================================================================
