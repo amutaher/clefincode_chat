@@ -3222,6 +3222,7 @@ def accept_meeting(meeting_id,user=None):
     meet_doc = frappe.get_doc("ClefinCode Chat Meet" , meeting_id)
     results = {
         "realtime_type" : "accept_meet",
+        "meeting_id":meeting_id
     }
     if user:
         results['user']=user
@@ -3376,6 +3377,8 @@ def get_body_message_information(realtime_type):
     elif realtime_type == "add_doctype":
         body = 'A new doctype has been added'
     elif realtime_type == "meet":
+        body = None
+    elif realtime_type == "accept_meet":
         body = None
     elif realtime_type == "decline_meet":
         body = None  

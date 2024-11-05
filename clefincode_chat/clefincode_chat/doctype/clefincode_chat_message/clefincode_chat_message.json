@@ -27,15 +27,12 @@
   "is_document",
   "is_link",
   "is_voice_clip",
-<<<<<<< HEAD
   "is_call",
   "duration",
-  "call_states"
-=======
+  "call_states",
   "is_mention",
   "is_screenshot",
   "whatsapp_message_id"
->>>>>>> develop
  ],
  "fields": [
   {
@@ -67,12 +64,8 @@
   {
    "fieldname": "sender_email",
    "fieldtype": "Data",
-<<<<<<< HEAD
    "label": "Sender Email",
    "options": "Email"
-=======
-   "label": "Sender Email"
->>>>>>> develop
   },
   {
    "fieldname": "column_break_xyikf",
@@ -94,11 +87,7 @@
    "fieldname": "message_template_type",
    "fieldtype": "Select",
    "label": "Message Template type",
-<<<<<<< HEAD
    "options": "\nCreate Group\nRename Group\nAdd User\nRemove User\nUser Left\nSet Admin\nSet Avatar\nSet Topic\nRename Topic\nRemove Topic\nAdd Doctype\nRemove Doctype\nSet Topic Status\nRemove Contributor\nVoice Call\nVideo Call"
-=======
-   "options": "\nCreate Group\nRename Group\nAdd User\nRemove User\nUser Left\nSet Admin\nSet Avatar\nSet Topic\nRename Topic\nRemove Topic\nAdd Doctype\nRemove Doctype\nSet Topic Status\nRemove Contributors\nSend Confirmation"
->>>>>>> develop
   },
   {
    "fieldname": "only_receive_by",
@@ -161,7 +150,6 @@
    "label": "Is Voice Clip"
   },
   {
-<<<<<<< HEAD
    "default": "0",
    "fieldname": "is_call",
    "fieldtype": "Check",
@@ -176,7 +164,8 @@
    "fieldname": "call_states",
    "fieldtype": "Data",
    "label": "Call States"
-=======
+  },
+   {
    "fieldname": "whatsapp_message_id",
    "fieldtype": "Data",
    "hidden": 1,
@@ -193,17 +182,12 @@
    "fieldname": "is_screenshot",
    "fieldtype": "Check",
    "label": "Is Screenshot"
->>>>>>> develop
   }
  ],
  "in_create": 1,
  "index_web_pages_for_search": 1,
  "links": [],
-<<<<<<< HEAD
  "modified": "2024-07-23 14:07:58.824884",
-=======
- "modified": "2024-10-04 23:29:25.649943",
->>>>>>> develop
  "modified_by": "Administrator",
  "module": "ClefinCode Chat",
  "name": "ClefinCode Chat Message",
