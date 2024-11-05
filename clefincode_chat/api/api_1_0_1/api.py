@@ -823,11 +823,7 @@ def send(content, user, room , email, send_date = None , is_first_message = 0, a
                 "is_media" : is_media if is_media else 0,            
                 "is_document" : is_document if is_document else 0,
                 "is_voice_clip" : is_voice_clip if is_voice_clip else 0,
-<<<<<<< HEAD
                 "is_call" : is_call if is_call else 0,
-=======
-                "is_mention": is_mention(content),
->>>>>>> develop
                 "file_id" : file_id,            
                 "send_date" : send_date,
                 "message_type" : message_type,

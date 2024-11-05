@@ -4,18 +4,10 @@ import firebase_admin
 from firebase_admin import  credentials, messaging
 from bs4 import BeautifulSoup
 
-<<<<<<< HEAD
 @frappe.whitelist(allow_guest = True)
 def send_notification_via_firebase(registration_token, info, realtime_type, platform = None ,title = None, body = None, same_user = None,is_call=None): 
     firebase_server_key = frappe.db.get_single_value("ClefinCode Chat Settings" , "firebase_server_key")
     if not firebase_server_key:
-=======
-def initialize_firebase():
-    firebase_server_key = frappe.db.get_single_value("ClefinCode Chat Settings", "firebase_server_key")
-    cleaned_key = firebase_server_key.strip() if firebase_server_key else None
-
-    if not cleaned_key:
->>>>>>> develop
         return
     else:
         cred_dict = json.loads(cleaned_key)
