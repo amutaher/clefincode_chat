@@ -662,7 +662,8 @@ def get_channels_list(user_email, limit=10, offset=0):
                 elif room['type'] == "Contributor":
                     room['room_name'] = "@" + frappe.get_doc("ClefinCode Chat Channel", room['parent_channel']).get_channel_name_for_contributor()
                     last_message_info = get_last_sub_channel_for_user(room['parent_channel'], user_email)
-                    room['send_date'] = last_message_info['send_date']
+                    if last_message_info:
+                        room['send_date'] = last_message_info['send_date']
                     room['user_unread_messages'] = contributor_unread_messages(user_email, room['parent_channel'])
                 elif room['type'] == "Group":
                     room['room_name'] = frappe.get_doc("ClefinCode Chat Channel", room['room']).get_group_name()
@@ -732,6 +733,8 @@ def get_last_sub_channel_for_user(parent_channel , user_email):
     ORDER BY ChatChannel.modified DESC
     LIMIT 1
     """ , as_dict = True)
+    if not last_sub_channel:
+        return ''
 
     last_sub_channel_message = frappe.db.sql(f"""
     SELECT name , content , send_date , modified , message_type , sender_email
@@ -1187,7 +1190,8 @@ def get_latest_channels_updates(user_email, last_message_date):
                 elif room['type'] == "Contributor":
                     room['room_name'] = "@" + frappe.get_doc("ClefinCode Chat Channel", room['parent_channel']).get_channel_name_for_contributor()
                     last_message_info = get_last_sub_channel_for_user(room['parent_channel'], user_email)
-                    room['send_date'] = last_message_info['send_date']
+                    if last_message_info:
+                        room['send_date'] = last_message_info['send_date']
                     room['user_unread_messages'] = contributor_unread_messages(user_email, room['parent_channel'])
                 elif room['type'] == "Group":
                     room['room_name'] = frappe.get_doc("ClefinCode Chat Channel", room['room']).get_group_name()
