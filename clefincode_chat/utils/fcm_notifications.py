@@ -11,14 +11,18 @@ def initialize_firebase():
     if not cleaned_key:
         return
     else:
-        cred_dict = json.loads(cleaned_key)
-        cred = credentials.Certificate(cred_dict)
-        firebase_admin.initialize_app(cred)
+        try:
+            firebase_admin.get_app()
+        except ValueError:
+            cred_dict = json.loads(cleaned_key)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
 
-initialize_firebase()
+
 
 @frappe.whitelist(allow_guest = True)
-def send_notification_via_firebase(registration_token, info, realtime_type, platform = None ,title = None, body = None, same_user = None):    
+def send_notification_via_firebase(registration_token, info, realtime_type, platform = None ,title = None, body = None, same_user = None):
+    initialize_firebase()    
     message=None
 
     if realtime_type in ["typing", "update_sub_channel_for_last_message"] or same_user == 1:        
